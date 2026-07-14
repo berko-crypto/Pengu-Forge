@@ -72,25 +72,31 @@ function loadCampaign(name) {
   const c = dbx.getCampaign(name);
   if (!c) return null;
   const read = (f) => ({ buf: fs.readFileSync(path.join(c.dir, f)), contentType: `image/${(path.extname(f).slice(1) || 'png').replace(/^jpg$/, 'jpeg')}` });
+  const overlayPath = path.join(c.dir, 'overlay.png');
   return {
     row: c,
     prompt: c.prompt,
     base: read(c.base_file),
     mask: c.mask_file ? { buf: fs.readFileSync(path.join(c.dir, c.mask_file)) } : null,
+    overlay: fs.existsSync(overlayPath) ? fs.readFileSync(overlayPath) : null,
     refs: JSON.parse(c.ref_files).map(read),
   };
 }
 
 /**
  * Shared campaign generation: swaps the user's penguin into the campaign scene.
- * Image order sent to the model: [base scene, user penguin, ...product refs].
+ * With an overlay: send only [base, penguin] (fewer inputs = composition holds),
+ * then deterministically paste the original product pixels on top — perfect
+ * fidelity guaranteed by code, not by the model.
  */
 async function runCampaignGeneration(interaction, campaignName, penguin, meta) {
   const c = loadCampaign(campaignName);
   if (!c) throw new Error(`Campaign "${campaignName}" no longer exists.`);
-  const images = [c.base, { buf: penguin.buf, contentType: penguin.contentType }, ...c.refs];
+  const images = c.overlay
+    ? [c.base, { buf: penguin.buf, contentType: penguin.contentType }]
+    : [c.base, { buf: penguin.buf, contentType: penguin.contentType }, ...c.refs];
   await runGeneration(interaction, {
-    images, mask: c.mask, prompt: c.prompt, aspect: 'square',
+    images, mask: c.overlay ? null : c.mask, overlay: c.overlay, prompt: c.prompt, aspect: 'square',
     quality: dbx.getSetting('campaign_quality'),
     meta: {
       ...meta,
@@ -114,20 +120,35 @@ async function seedCampaignsFromAssets() {
     const src = path.join(assetsRoot, name);
     if (!fs.statSync(src).isDirectory()) continue;
 
-    // Upgrade path: campaign exists but has no mask, and assets now provides one
+    // Upgrade path: campaign exists — attach a newly-added overlay/mask, refresh seed-authored prompt
     const existing = dbx.getCampaign(name);
     if (existing) {
-      if (!existing.mask_file && fs.existsSync(path.join(src, 'mask.png'))) {
-        try {
+      try {
+        if (fs.existsSync(path.join(src, 'overlay.png'))) {
+          fs.copyFileSync(path.join(src, 'overlay.png'), path.join(existing.dir, 'overlay.png'));
+          if (existing.mask_file) {
+            dbx.db.prepare('UPDATE campaigns SET mask_file = NULL WHERE name = ?').run(name);
+            console.log(`🧹 cleared mask on "${name}" — overlay compositing supersedes it`);
+          }
+          console.log(`🖼️ attached product overlay to "${name}" — held items now pasted pixel-perfect after generation`);
+        } else if (!existing.mask_file && fs.existsSync(path.join(src, 'mask.png'))) {
           const bm = await sharp(path.join(existing.dir, existing.base_file)).metadata();
           const normalized = await sharp(path.join(src, 'mask.png')).ensureAlpha().resize(bm.width, bm.height, { fit: 'fill' }).png().toBuffer();
           if (!(await sharp(normalized).stats()).isOpaque) {
             fs.writeFileSync(path.join(existing.dir, 'mask.png'), normalized);
             dbx.db.prepare('UPDATE campaigns SET mask_file = ? WHERE name = ?').run('mask.png', name);
-            console.log(`🎭 attached mask to existing campaign "${name}" — held items now pixel-preserved`);
+            console.log(`🎭 attached mask to existing campaign "${name}"`);
           }
-        } catch (e) { console.error(`mask attach failed for ${name}:`, e.message); }
-      }
+        }
+        // refresh prompt only if this campaign was authored by seeding (never clobber admin edits)
+        if (existing.added_by === 'assets-seed' && fs.existsSync(path.join(src, 'prompt.txt'))) {
+          const newPrompt = fs.readFileSync(path.join(src, 'prompt.txt'), 'utf8').trim();
+          if (newPrompt && newPrompt !== existing.prompt) {
+            dbx.db.prepare('UPDATE campaigns SET prompt = ? WHERE name = ?').run(newPrompt, name);
+            console.log(`📝 refreshed prompt for "${name}" from assets`);
+          }
+        }
+      } catch (e) { console.error(`campaign upgrade failed for ${name}:`, e.message); }
       continue;
     }
     try {
@@ -152,6 +173,7 @@ async function seedCampaignsFromAssets() {
 
       const refFiles = files.filter(f => f.startsWith('ref-')).sort();
       for (const f of refFiles) fs.copyFileSync(path.join(src, f), path.join(dir, f));
+      if (files.includes('overlay.png')) fs.copyFileSync(path.join(src, 'overlay.png'), path.join(dir, 'overlay.png'));
 
       const prompt = fs.readFileSync(path.join(src, promptFile), 'utf8').trim();
       dbx.addCampaign({ name, prompt, dir, baseFile, maskFile, refFiles, addedBy: 'assets-seed' });
@@ -202,7 +224,15 @@ async function runGeneration(interaction, spec) {
     if (spec.aspect && spec.aspect !== 'square') rules = rules.filter(r => !/square|1:1/i.test(r));
     const outputPx = dbx.getSetting('output_px');
 
-    const out = await generateGraphic({ images: spec.images, mask: spec.mask, prompt: spec.prompt, rules, quality, size, outputPx });
+    const out0 = await generateGraphic({ images: spec.images, mask: spec.mask, prompt: spec.prompt, rules, quality, size, outputPx });
+    let out = out0;
+    // Deterministic product paste: the original pixels go on top of the generation,
+    // so held items are perfect regardless of what the model did.
+    if (spec.overlay) {
+      const meta0 = await sharp(out).metadata();
+      const ov = await sharp(spec.overlay).resize(meta0.width, meta0.height, { fit: 'fill' }).png().toBuffer();
+      out = await sharp(out).composite([{ input: ov }]).png().toBuffer();
+    }
 
     dbx.recordUse(userId, {
       template: spec.meta.template ?? null,
