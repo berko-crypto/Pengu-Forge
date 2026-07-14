@@ -94,6 +94,7 @@ const DEFAULTS = {
   winner_emoji: '🔥',      // vote emoji tallied for daily winner
   streak_every: '5',       // +1 daily limit per N consecutive days generating
   streak_cap: '3',         // max streak bonus
+  default_campaign: '',    // if set, a bare /generate (no template/prompt/example) runs this campaign
 };
 
 // Seed default generation rules on first boot

@@ -99,13 +99,59 @@ async function runCampaignGeneration(interaction, campaignName, penguin, meta) {
   });
 }
 
+/**
+ * Seed campaigns from the repo's ./assets folder on boot.
+ * Each subfolder = one campaign: base.* (required), prompt.txt (required),
+ * mask.png (optional), ref-*.* (optional). Skipped if the campaign already
+ * exists in the DB, so admin edits made via Discord are never overwritten.
+ * The first seeded campaign becomes default_campaign if none is set.
+ */
+async function seedCampaignsFromAssets() {
+  const assetsRoot = path.join(__dirname, 'assets');
+  if (!fs.existsSync(assetsRoot)) return;
+  for (const name of fs.readdirSync(assetsRoot)) {
+    const src = path.join(assetsRoot, name);
+    if (!fs.statSync(src).isDirectory() || dbx.getCampaign(name)) continue;
+    try {
+      const files = fs.readdirSync(src);
+      const baseFile = files.find(f => f.startsWith('base.'));
+      const promptFile = files.find(f => f === 'prompt.txt');
+      if (!baseFile || !promptFile) { console.warn(`assets/${name}: needs base.* and prompt.txt — skipped`); continue; }
+
+      const dir = path.join(CAMPAIGNS_DIR, name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.copyFileSync(path.join(src, baseFile), path.join(dir, baseFile));
+
+      let maskFile = null;
+      if (files.includes('mask.png')) {
+        const bm = await sharp(path.join(src, baseFile)).metadata();
+        const normalized = await sharp(path.join(src, 'mask.png')).ensureAlpha().resize(bm.width, bm.height, { fit: 'fill' }).png().toBuffer();
+        if (!(await sharp(normalized).stats()).isOpaque) {
+          maskFile = 'mask.png';
+          fs.writeFileSync(path.join(dir, maskFile), normalized);
+        } else console.warn(`assets/${name}/mask.png has no transparency — ignored`);
+      }
+
+      const refFiles = files.filter(f => f.startsWith('ref-')).sort();
+      for (const f of refFiles) fs.copyFileSync(path.join(src, f), path.join(dir, f));
+
+      const prompt = fs.readFileSync(path.join(src, promptFile), 'utf8').trim();
+      dbx.addCampaign({ name, prompt, dir, baseFile, maskFile, refFiles, addedBy: 'assets-seed' });
+      if (!dbx.getSetting('default_campaign')) dbx.setSetting('default_campaign', name);
+      console.log(`📣 seeded campaign "${name}" from assets (${maskFile ? 'masked' : 'ref-guided'}, ${refFiles.length} refs)${dbx.getSetting('default_campaign') === name ? ' — set as default' : ''}`);
+    } catch (e) {
+      console.error(`campaign seed failed for ${name}:`, e.message);
+    }
+  }
+}
+
 async function handleCampaign(interaction) {
   const gateErr = gateCheck(interaction);
   if (gateErr) return interaction.reply({ content: gateErr, flags: MessageFlags.Ephemeral });
 
-  const name = interaction.options.getString('campaign');
-  if (!dbx.getCampaign(name)) {
-    return interaction.reply({ content: `No campaign called \`${name}\`. Pick one from the autocomplete list.`, flags: MessageFlags.Ephemeral });
+  const name = interaction.options.getString('campaign') || dbx.getSetting('default_campaign');
+  if (!name || !dbx.getCampaign(name)) {
+    return interaction.reply({ content: name ? `No campaign called \`${name}\`. Pick one from the autocomplete list.` : 'No campaign chosen and no default set — pick one from the autocomplete list.', flags: MessageFlags.Ephemeral });
   }
   const attachment = interaction.options.getAttachment('image');
   const collection = interaction.options.getString('collection');
@@ -244,6 +290,28 @@ async function handleGenerate(interaction) {
   } else if (customPrompt) {
     prompt = customPrompt;
   } else if (!example) {
+    // No template, prompt, or example: if a default campaign is live, run that.
+    const defCampaign = dbx.getSetting('default_campaign');
+    if (defCampaign && dbx.getCampaign(defCampaign)) {
+      await interaction.deferReply();
+      try {
+        let penguin, sourceLabel;
+        if (attachment) {
+          penguin = await downloadAttachment(attachment, 'penguin image');
+          sourceLabel = 'your penguin';
+        } else {
+          const p = await getPenguinImage(collection, id);
+          penguin = { buf: p.buf, contentType: p.contentType };
+          sourceLabel = p.label;
+        }
+        await runCampaignGeneration(interaction, defCampaign, penguin, { collection, tokenId: id, sourceLabel });
+      } catch (err) {
+        console.error('default campaign failed:', err);
+        inFlight.delete(interaction.user.id);
+        await interaction.editReply({ content: `❌ ${err.message || 'Something went wrong.'} (Your quota was not used.)` }).catch(() => {});
+      }
+      return;
+    }
     return interaction.reply({ content: 'Pick a **template**, write a **prompt**, or attach an **example** image to replicate (or combine them).', flags: MessageFlags.Ephemeral });
   }
   if (example) {
@@ -564,6 +632,16 @@ async function handleAdmin(interaction) {
   }
 
   if (group === 'set') {
+    if (sub === 'default-campaign') {
+      const v = interaction.options.getString('value').trim().toLowerCase();
+      if (v === 'off' || v === 'none' || v === '') {
+        dbx.setSetting('default_campaign', '');
+        return interaction.reply({ content: '📣 Default campaign turned off — bare `/generate` requires a template/prompt/example again.', flags: MessageFlags.Ephemeral });
+      }
+      if (!dbx.getCampaign(v)) return interaction.reply({ content: `No campaign called \`${v}\`.`, flags: MessageFlags.Ephemeral });
+      dbx.setSetting('default_campaign', v);
+      return interaction.reply({ content: `📣 Default campaign → **${v}**. A bare \`/generate id:<penguin>\` now runs it.`, flags: MessageFlags.Ephemeral });
+    }
     if (sub === 'channel' || sub === 'gallery') {
       const ch = interaction.options.getChannel('value');
       const key = sub === 'channel' ? 'allowed_channel' : 'gallery_channel';
@@ -618,9 +696,10 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isAutocomplete()) {
       const focused = interaction.options.getFocused(true);
       const q = focused.value.toLowerCase();
-      if (focused.name === 'campaign') {
-        const choices = dbx.listCampaigns().filter(c => c.name.includes(q)).slice(0, 25)
+      if (focused.name === 'campaign' || (interaction.commandName === 'pengu-admin' && focused.name === 'value' && interaction.options.getSubcommand(false) === 'default-campaign')) {
+        const choices = dbx.listCampaigns().filter(c => c.name.includes(q)).slice(0, 24)
           .map(c => ({ name: c.name, value: c.name }));
+        if (focused.name === 'value') choices.push({ name: 'off (disable default)', value: 'off' });
         return interaction.respond(choices);
       }
       if (focused.name === 'template' || focused.name === 'name') {
@@ -652,6 +731,7 @@ client.on('interactionCreate', async (interaction) => {
 client.once('ready', () => {
   console.log(`🐧 PenguForge online as ${client.user.tag}`);
   cleanupExamples();
+  seedCampaignsFromAssets().catch(e => console.error('campaign seeding error:', e));
   scheduleWinner();
 });
 

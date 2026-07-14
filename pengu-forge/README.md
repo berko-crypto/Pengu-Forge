@@ -102,3 +102,11 @@ For official drops (e.g. KAKAWOW Phantom): admins lock in a base scene, prompt, 
 **Why the mask matters:** with a mask, every pixel *outside* the transparent region is preserved **byte-for-byte** from the base image — the products, background, and lighting are literally untouched; only the penguin region is regenerated (guided by the refs where products overlap flippers). Without a mask it falls back to reference-guided regeneration: close, but not pixel-exact. Make the mask in Photopea/Photoshop: open the base, erase the penguin (leave held items opaque!), export PNG.
 
 Image order in campaign prompts: **1st = base scene, 2nd = holder's penguin, 3rd+ = refs.** Campaign posts go to the gallery and are remixable like everything else.
+
+## Bundled campaign: kakawow-phantom
+
+The repo ships with the KAKAWOW Phantom campaign in `assets/kakawow-phantom/` (base scene, 3 product refs, prompt.txt). On first boot the bot seeds it into the database and — if no default is set — makes it the **default campaign**, so a bare `/generate id:6873` runs it directly. `/campaign` with no name picked also uses the default.
+
+Manage it like any campaign afterwards: `/pengu-admin set default-campaign off` when the drop window ends, or point it at a different campaign. Seeding never overwrites — once it's in the DB, edits via Discord stick.
+
+**Adding a mask later (recommended):** make a PNG the same size as `base.png` with the penguin area erased/transparent (products opaque), upload it to `assets/kakawow-phantom/mask.png` via GitHub web, then in Discord: `/pengu-admin campaign remove campaign:kakawow-phantom` and redeploy — it reseeds with the mask, and held items become pixel-exact.
