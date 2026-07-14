@@ -95,6 +95,7 @@ const DEFAULTS = {
   streak_every: '5',       // +1 daily limit per N consecutive days generating
   streak_cap: '3',         // max streak bonus
   default_campaign: '',    // if set, a bare /generate (no template/prompt/example) runs this campaign
+  campaign_quality: 'high',// campaigns are official drops — text/product fidelity needs high; casual gens stay on 'quality'
 };
 
 // Seed default generation rules on first boot
