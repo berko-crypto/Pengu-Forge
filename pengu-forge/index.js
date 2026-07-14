@@ -91,6 +91,7 @@ async function runCampaignGeneration(interaction, campaignName, penguin, meta) {
   const images = [c.base, { buf: penguin.buf, contentType: penguin.contentType }, ...c.refs];
   await runGeneration(interaction, {
     images, mask: c.mask, prompt: c.prompt, aspect: 'square',
+    quality: dbx.getSetting('campaign_quality'),
     meta: {
       ...meta,
       template: `campaign:${c.row.name}`,
@@ -111,7 +112,24 @@ async function seedCampaignsFromAssets() {
   if (!fs.existsSync(assetsRoot)) return;
   for (const name of fs.readdirSync(assetsRoot)) {
     const src = path.join(assetsRoot, name);
-    if (!fs.statSync(src).isDirectory() || dbx.getCampaign(name)) continue;
+    if (!fs.statSync(src).isDirectory()) continue;
+
+    // Upgrade path: campaign exists but has no mask, and assets now provides one
+    const existing = dbx.getCampaign(name);
+    if (existing) {
+      if (!existing.mask_file && fs.existsSync(path.join(src, 'mask.png'))) {
+        try {
+          const bm = await sharp(path.join(existing.dir, existing.base_file)).metadata();
+          const normalized = await sharp(path.join(src, 'mask.png')).ensureAlpha().resize(bm.width, bm.height, { fit: 'fill' }).png().toBuffer();
+          if (!(await sharp(normalized).stats()).isOpaque) {
+            fs.writeFileSync(path.join(existing.dir, 'mask.png'), normalized);
+            dbx.db.prepare('UPDATE campaigns SET mask_file = ? WHERE name = ?').run('mask.png', name);
+            console.log(`🎭 attached mask to existing campaign "${name}" — held items now pixel-preserved`);
+          }
+        } catch (e) { console.error(`mask attach failed for ${name}:`, e.message); }
+      }
+      continue;
+    }
     try {
       const files = fs.readdirSync(src);
       const baseFile = files.find(f => f.startsWith('base.'));
@@ -178,7 +196,7 @@ async function runGeneration(interaction, spec) {
   const userId = interaction.user.id;
   inFlight.add(userId);
   try {
-    const quality = dbx.getSetting('quality');
+    const quality = spec.quality || dbx.getSetting('quality');
     const size = { square: '1024x1024', portrait: '1024x1536', landscape: '1536x1024' }[spec.aspect || 'square'];
     let rules = dbx.listRules().map(r => r.text);
     if (spec.aspect && spec.aspect !== 'square') rules = rules.filter(r => !/square|1:1/i.test(r));
@@ -629,7 +647,7 @@ async function handleAdmin(interaction) {
       return interaction.reply({ content: ch ? `📍 ${what} → <#${ch.id}>.` : `📍 ${what} turned off / unrestricted.`, flags: MessageFlags.Ephemeral });
     }
     const map = {
-      limit: 'daily_limit', quality: 'quality', 'output-px': 'output_px',
+      limit: 'daily_limit', quality: 'quality', 'campaign-quality': 'campaign_quality', 'output-px': 'output_px',
       'booster-bonus': 'booster_bonus', cooldown: 'cooldown_seconds',
       'example-prompt': 'example_prompt', 'winner-bonus': 'winner_bonus',
     };
