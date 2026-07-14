@@ -71,7 +71,7 @@ const extFor = (ct) => (ct || 'image/png').split('/')[1]?.split('+')[0] || 'png'
 function loadCampaign(name) {
   const c = dbx.getCampaign(name);
   if (!c) return null;
-  const read = (f) => ({ buf: fs.readFileSync(path.join(c.dir, f)), contentType: `image/${path.extname(f).slice(1) || 'png'}` });
+  const read = (f) => ({ buf: fs.readFileSync(path.join(c.dir, f)), contentType: `image/${(path.extname(f).slice(1) || 'png').replace(/^jpg$/, 'jpeg')}` });
   return {
     row: c,
     prompt: c.prompt,
