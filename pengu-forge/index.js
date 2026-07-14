@@ -145,38 +145,25 @@ async function seedCampaignsFromAssets() {
   }
 }
 
-async function handleCampaign(interaction) {
+async function handleSuplay(interaction) {
   const gateErr = gateCheck(interaction);
   if (gateErr) return interaction.reply({ content: gateErr, flags: MessageFlags.Ephemeral });
 
-  const name = interaction.options.getString('campaign') || dbx.getSetting('default_campaign');
+  const name = dbx.getSetting('default_campaign');
   if (!name || !dbx.getCampaign(name)) {
-    return interaction.reply({ content: name ? `No campaign called \`${name}\`. Pick one from the autocomplete list.` : 'No campaign chosen and no default set — pick one from the autocomplete list.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'No drop is live right now — check back soon! 🐧', flags: MessageFlags.Ephemeral });
   }
-  const attachment = interaction.options.getAttachment('image');
   const collection = interaction.options.getString('collection');
   const id = interaction.options.getInteger('id');
-  if (!attachment && (collection == null || id == null)) {
-    return interaction.reply({
-      content: 'Give me your penguin: attach an **image**, or pick **collection** + **id**.',
-      flags: MessageFlags.Ephemeral,
-    });
-  }
 
   await interaction.deferReply();
   try {
-    let penguin, sourceLabel;
-    if (attachment) {
-      penguin = await downloadAttachment(attachment, 'penguin image');
-      sourceLabel = 'your penguin';
-    } else {
-      const p = await getPenguinImage(collection, id);
-      penguin = { buf: p.buf, contentType: p.contentType };
-      sourceLabel = p.label;
-    }
-    await runCampaignGeneration(interaction, name, penguin, { collection, tokenId: id, sourceLabel });
+    const p = await getPenguinImage(collection, id);
+    await runCampaignGeneration(interaction, name, { buf: p.buf, contentType: p.contentType }, {
+      collection, tokenId: id, sourceLabel: p.label,
+    });
   } catch (err) {
-    console.error('campaign failed:', err);
+    console.error('suplay failed:', err);
     inFlight.delete(interaction.user.id);
     await interaction.editReply({ content: `❌ ${err.message || 'Something went wrong.'} (Your quota was not used.)` }).catch(() => {});
   }
@@ -520,14 +507,6 @@ async function handleQuota(interaction) {
   await interaction.reply({ content: lines.join('\n'), flags: MessageFlags.Ephemeral });
 }
 
-async function handleTemplates(interaction) {
-  const list = dbx.listTemplates();
-  if (!list.length) return interaction.reply({ content: 'No templates yet — admins can add some with `/pengu-admin template add`.', flags: MessageFlags.Ephemeral });
-  const lines = list.map(t => `**${t.name}** — ${t.prompt.length > 90 ? t.prompt.slice(0, 90) + '…' : t.prompt}`);
-  const embed = new EmbedBuilder().setColor(PENGU_BLUE).setTitle('🖼️ Preset templates').setDescription(lines.join('\n'));
-  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
-}
-
 // ---------------- /pengu-admin ----------------
 async function handleAdmin(interaction) {
   const group = interaction.options.getSubcommandGroup(false);
@@ -714,10 +693,9 @@ client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
     switch (interaction.commandName) {
+      case 'suplay': return await handleSuplay(interaction);
       case 'generate': return await handleGenerate(interaction);
-      case 'campaign': return await handleCampaign(interaction);
       case 'quota': return await handleQuota(interaction);
-      case 'templates': return await handleTemplates(interaction);
       case 'pengu-admin': return await handleAdmin(interaction);
     }
   } catch (err) {
