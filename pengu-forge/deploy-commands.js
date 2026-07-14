@@ -15,22 +15,16 @@ const generate = new SlashCommandBuilder()
   .addStringOption(o => o.setName('aspect').setDescription('Override the default square format')
     .addChoices({ name: 'Square (default)', value: 'square' }, { name: 'Portrait 2:3', value: 'portrait' }, { name: 'Landscape 3:2', value: 'landscape' }));
 
-const campaign = new SlashCommandBuilder()
-  .setName('campaign')
-  .setDescription('Generate from an official campaign — your penguin swapped into a fixed scene')
-  .addStringOption(o => o.setName('campaign').setDescription('Which campaign (defaults to the active one)').setAutocomplete(true))
-  .addStringOption(o => o.setName('collection').setDescription('Which collection your ID belongs to')
+const suplay = new SlashCommandBuilder()
+  .setName('suplay')
+  .setDescription('🃏 Put YOUR penguin in the KAKAWOW Phantom drop')
+  .addStringOption(o => o.setName('collection').setDescription('Which collection is your penguin from?').setRequired(true)
     .addChoices({ name: 'Pudgy Penguins', value: 'pudgy' }, { name: 'Lil Pudgys', value: 'lil' }))
-  .addIntegerOption(o => o.setName('id').setDescription('Token ID (e.g. 6873)').setMinValue(0))
-  .addAttachmentOption(o => o.setName('image').setDescription('...or attach your penguin image instead'));
+  .addIntegerOption(o => o.setName('id').setDescription('Your penguin ID (e.g. 6873)').setRequired(true).setMinValue(0));
 
 const quota = new SlashCommandBuilder()
   .setName('quota')
   .setDescription('Check how many generations you have left today');
-
-const templates = new SlashCommandBuilder()
-  .setName('templates')
-  .setDescription('List available preset templates');
 
 const admin = new SlashCommandBuilder()
   .setName('pengu-admin')
@@ -90,7 +84,7 @@ const admin = new SlashCommandBuilder()
   .addSubcommand(s => s.setName('settings').setDescription('Show current settings'))
   .addSubcommand(s => s.setName('stats').setDescription('Usage stats (last 7 days)'));
 
-const commands = [generate, campaign, quota, templates, admin].map(c => c.toJSON());
+const commands = [suplay, generate, quota, admin].map(c => c.toJSON());
 
 async function register() {
   const rest = new REST().setToken(process.env.DISCORD_TOKEN);
