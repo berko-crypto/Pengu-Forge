@@ -20,7 +20,7 @@ function buildPrompt(prompt, rules = []) {
   return out;
 }
 
-async function generateGraphic({ images, mask, prompt, rules = [], quality = 'low', size = '1024x1024', outputPx = 0 }) {
+async function generateGraphic({ images, mask, prompt, rules = [], quality = 'low', size = '1024x1024', outputPx = 0, inputFidelity = null }) {
   if (!OPENAI_KEY) throw new Error('OPENAI_API_KEY is not set.');
 
   const form = new FormData();
@@ -37,6 +37,9 @@ async function generateGraphic({ images, mask, prompt, rules = [], quality = 'lo
   // opaque pixels = preserved exactly. Must match the first image's dimensions.
   if (mask) form.append('mask', new Blob([mask.buf], { type: 'image/png' }), 'mask.png');
   form.append('prompt', buildPrompt(prompt, rules));
+  // 'high' makes gpt-image-1 preserve input details (logos, text, faces, traits).
+  // The default 'low' is the main reason raw API results look worse than ChatGPT's.
+  if (inputFidelity) form.append('input_fidelity', inputFidelity);
   form.append('size', size);
   form.append('quality', quality);
   form.append('n', '1');
