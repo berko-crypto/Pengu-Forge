@@ -98,6 +98,7 @@ async function runCampaignGeneration(interaction, campaignName, penguin, meta) {
   await runGeneration(interaction, {
     images, mask: c.overlay ? null : c.mask, overlay: c.overlay, prompt: c.prompt, aspect: 'square',
     quality: dbx.getSetting('campaign_quality'),
+    inputFidelity: 'high',
     meta: {
       ...meta,
       template: `campaign:${c.row.name}`,
@@ -224,11 +225,11 @@ async function runGeneration(interaction, spec) {
     if (spec.aspect && spec.aspect !== 'square') rules = rules.filter(r => !/square|1:1/i.test(r));
     const outputPx = dbx.getSetting('output_px');
 
-    const out0 = await generateGraphic({ images: spec.images, mask: spec.mask, prompt: spec.prompt, rules, quality, size, outputPx });
+    const out0 = await generateGraphic({ images: spec.images, mask: spec.mask, prompt: spec.prompt, rules, quality, size, outputPx, inputFidelity: spec.inputFidelity });
     let out = out0;
     // Deterministic product paste: the original pixels go on top of the generation,
     // so held items are perfect regardless of what the model did.
-    if (spec.overlay) {
+    if (spec.overlay && dbx.getSetting('campaign_overlay') === '1') {
       const meta0 = await sharp(out).metadata();
       const ov = await sharp(spec.overlay).resize(meta0.width, meta0.height, { fit: 'fill' }).png().toBuffer();
       out = await sharp(out).composite([{ input: ov }]).png().toBuffer();
@@ -677,7 +678,7 @@ async function handleAdmin(interaction) {
       return interaction.reply({ content: ch ? `📍 ${what} → <#${ch.id}>.` : `📍 ${what} turned off / unrestricted.`, flags: MessageFlags.Ephemeral });
     }
     const map = {
-      limit: 'daily_limit', quality: 'quality', 'campaign-quality': 'campaign_quality', 'output-px': 'output_px',
+      limit: 'daily_limit', quality: 'quality', 'campaign-quality': 'campaign_quality', 'campaign-overlay': 'campaign_overlay', 'output-px': 'output_px',
       'booster-bonus': 'booster_bonus', cooldown: 'cooldown_seconds',
       'example-prompt': 'example_prompt', 'winner-bonus': 'winner_bonus',
     };
