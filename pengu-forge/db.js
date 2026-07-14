@@ -96,6 +96,7 @@ const DEFAULTS = {
   streak_cap: '3',         // max streak bonus
   default_campaign: '',    // if set, a bare /generate (no template/prompt/example) runs this campaign
   campaign_quality: 'high',// campaigns are official drops — text/product fidelity needs high; casual gens stay on 'quality'
+  campaign_overlay: '0',   // paste original product pixels over campaign outputs ('1' = on); off by default with input_fidelity high
 };
 
 // Seed default generation rules on first boot
